@@ -891,7 +891,23 @@ def create_app(
                             transport.discard_pending_audio()
                         if was_in_response or was_response_pending:
                             if interrupt_enabled:
+                                if unit.cancel_scope.discarding:
+                                    # Rate-limited: the discard guard is still set from a
+                                    # prior cancel whose done-sentinel never arrived.  This
+                                    # is the wedge that silently drops every subsequent
+                                    # response's audio, so make it visible in the logs.
+                                    now = time.monotonic()
+                                    if now - unit.last_discard_warn_s >= 30.0:
+                                        unit.last_discard_warn_s = now
+                                        logger.warning(
+                                            "Pipeline %d: barge-in while discard guard still set "
+                                            "(gen=%d) — a prior response's done-sentinel never "
+                                            "arrived; clearing guard",
+                                            unit.index,
+                                            unit.cancel_scope.generation,
+                                        )
                                 unit.cancel_scope.cancel()
+                                unit.cancel_scope.new_response()
                                 unit.service.close_pending_responses(session_id)
                                 _flush_queue(unit.text_prompt_queue, preserve=_keep_pipeline_control)
                                 _flush_queue(unit.output_queue, preserve=_keep_cancel_bookkeeping)

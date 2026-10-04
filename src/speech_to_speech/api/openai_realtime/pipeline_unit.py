@@ -74,3 +74,6 @@ class PipelineUnit(BaseModel):
     handlers: list[Any]
 
     session: Optional[SessionState] = None
+    # Monotonic timestamp of the last "discard guard still set" warning, for
+    # rate-limiting the log line in the send loop's barge-in path.
+    last_discard_warn_s: float = 0.0

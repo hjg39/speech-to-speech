@@ -33,13 +33,15 @@ class CancelScope:
         self._discarding = True
 
     def response_done(self, generation: int | None = None) -> None:
-        """Pipeline acknowledged completion.  Clears the discard guard."""
-        if (
-            generation is not None
-            and self._discarded_generation is not None
-            and generation not in {self._discarded_generation, self._gen}
-        ):
-            return
+        """Pipeline acknowledged completion.  Clears the discard guard.
+
+        The guard is cleared unconditionally: a done-sentinel is a terminal
+        signal, and the generation-aware discard gate (``_generation_is_discardable``)
+        already drops stale audio on its own.  Gating the clear on a generation
+        match let a superseded response whose sentinel arrived after a second
+        cancel wedge ``discarding`` True forever, silently dropping every
+        subsequent response's audio.
+        """
         self._discarding = False
         self._discarded_generation = None
 
