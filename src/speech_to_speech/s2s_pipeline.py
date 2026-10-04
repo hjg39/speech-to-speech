@@ -507,6 +507,7 @@ def _build_pipeline_unit(
         chat_size=chat_size,
         speculative_turns=speculative_turns,
         default_instructions=default_instructions,
+        enable_partial_prefill=module_kwargs.enable_partial_prefill,
     )
 
     if module_kwargs.enable_live_transcription and not stt_selection.spec.capabilities.streams_audio_chunks:

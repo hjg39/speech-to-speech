@@ -256,6 +256,9 @@ class ConnState(BaseModel):
     completed_tool_response_keys: dict[str, None] = Field(default_factory=dict)
     tool_followup_prefetch_request: GenerateResponseRequest | None = None
     tool_followup_prefetch_origin_response_key: str | None = None
+    partial_prefill_response_keys: set[str] = Field(default_factory=set)
+    completed_partial_prefill_response_keys: dict[str, None] = Field(default_factory=dict)
+    partial_prefill_turns: set[str] = Field(default_factory=set)
     # A client-triggered response is not visible until its response.created
     # frame has finished sending. Pipeline output is held behind this key so a
     # fast or already-buffered generation cannot overtake that lifecycle event.
@@ -303,12 +306,14 @@ class RealtimeService:
         chat_size: int = 10,
         speculative_turns: SpeculativeTurnTracker | None = None,
         default_instructions: str | None = None,
+        enable_partial_prefill: bool = False,
     ) -> None:
         self.text_prompt_queue = text_prompt_queue
         self.should_listen = should_listen
         self._chat_size = chat_size
         self.speculative_turns = speculative_turns
         self._default_instructions = default_instructions
+        self._enable_partial_prefill = enable_partial_prefill
         self._conns: dict[str, ConnState] = {}
         self.total_usage = GlobalUsageMetrics()
 
@@ -540,7 +545,32 @@ class RealtimeService:
         # Provider-reported usage is billable accounting, not client-visible
         # assistant output. Cancellation must not make it stale.
         if isinstance(event, TokenUsageEvent):
+            st = self._state(conn_id)
+            if (
+                event.response_key in st.partial_prefill_response_keys
+                or event.response_key in st.completed_partial_prefill_response_keys
+            ):
+                self.total_usage.input_tokens += event.input_tokens
+                self.total_usage.output_tokens += event.output_tokens
+                return []
             return self._on_token_usage(conn_id, event)
+
+        st = self._state(conn_id)
+        response_key = getattr(event, "response_key", None)
+        if (
+            response_key in st.partial_prefill_response_keys
+            or response_key in st.completed_partial_prefill_response_keys
+        ):
+            if isinstance(event, (ResponseGenerationDoneEvent, ResponseFailedEvent)):
+                if response_key in st.partial_prefill_response_keys:
+                    st.partial_prefill_response_keys.discard(response_key)
+                    st.completed_partial_prefill_response_keys[response_key] = None
+                    while len(st.completed_partial_prefill_response_keys) > 128:
+                        st.completed_partial_prefill_response_keys.pop(
+                            next(iter(st.completed_partial_prefill_response_keys))
+                        )
+                    self.close_response_key(conn_id, response_key)
+            return []
 
         if isinstance(event, (AssistantOutputEvent, AssistantToolCallReadyEvent)):
             # A TTS failure can overtake assistant content that the LLM already
@@ -684,6 +714,49 @@ class RealtimeService:
             queue.put(request)
 
         return [*completed_events]
+
+    def _maybe_start_partial_prefill(
+        self,
+        conn_id: str,
+        event: PartialTranscriptionEvent,
+        item_id: str,
+        transcript_prefix: str,
+    ) -> None:
+        if not self._enable_partial_prefill or len(transcript_prefix.split()) < 6:
+            return
+
+        st = self._state(conn_id)
+        turn_key = event.turn_id or item_id
+        if turn_key in st.partial_prefill_turns:
+            return
+
+        queue = self.text_prompt_queue
+        if queue is None:
+            return
+
+        chat = st.runtime_config.chat.copy(deep=True)
+        chat.add_item(make_user_message(transcript_prefix))
+        runtime_config = RuntimeConfig(
+            chat=chat,
+            session=st.runtime_config.session.model_copy(deep=True),
+        )
+        request = GenerateResponseRequest(
+            runtime_config=runtime_config,
+            response=RealtimeResponseCreateParams(
+                max_output_tokens=1,
+                output_modalities=["text"],
+                tool_choice="none",
+                tools=[],
+            ),
+            turn_id=event.turn_id,
+            turn_revision=event.turn_revision,
+        )
+        st.partial_prefill_turns.add(turn_key)
+        if len(st.partial_prefill_turns) > 128:
+            st.partial_prefill_turns.pop()
+        st.partial_prefill_response_keys.add(request.response_key)
+        queue.put(request)
+        logger.debug("Started private partial-transcript prefill for turn=%s", event.turn_id)
 
     def _on_transcription_failed(self, conn_id: str, event: TranscriptionFailedEvent) -> list[ServerEvent]:
         """Surface a final STT failure without creating conversation or LLM work."""

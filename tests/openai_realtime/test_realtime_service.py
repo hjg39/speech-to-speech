@@ -3719,6 +3719,58 @@ class TestDispatchPipelineEvent:
         assert service._state(conn_id).response_usage.output_tokens == 5
         service.unregister(conn_id)
 
+    def test_partial_prefill_uses_stable_prefix_and_hides_its_output(self, text_prompt_queue, runtime_config):
+        service = RealtimeService(
+            text_prompt_queue=text_prompt_queue,
+            enable_partial_prefill=True,
+        )
+        conn_id = service.register()
+        service._state(conn_id).runtime_config = runtime_config
+
+        service.dispatch_pipeline_event(conn_id, SpeechStartedEvent(turn_id="turn_1"))
+        service.dispatch_pipeline_event(
+            conn_id,
+            PartialTranscriptionEvent(delta="one two three four five six seven", turn_id="turn_1"),
+        )
+        service.dispatch_pipeline_event(
+            conn_id,
+            PartialTranscriptionEvent(delta="one two three four five six seven eight", turn_id="turn_1"),
+        )
+
+        request = text_prompt_queue.get_nowait()
+        assert request.response is not None
+        assert request.response.max_output_tokens == 1
+        assert request.response.tool_choice == "none"
+        assert request.runtime_config.chat.buffer[-1].content[0].text == "one two three four five six"
+        assert runtime_config.chat.buffer == []
+        assert service.response.is_response_output_blocked(conn_id, request.response_key)
+        assert (
+            service.dispatch_pipeline_event(
+                conn_id,
+                AssistantOutputEvent(text="private token", response_key=request.response_key),
+            )
+            == []
+        )
+
+        service.dispatch_pipeline_event(
+            conn_id,
+            ResponseGenerationDoneEvent(response_key=request.response_key),
+        )
+
+        state = service._state(conn_id)
+        assert request.response_key not in state.partial_prefill_response_keys
+        assert request.response_key in state.closed_response_keys
+        assert not service.response.is_response_output_blocked(conn_id, request.response_key)
+        assert (
+            service.dispatch_pipeline_event(
+                conn_id,
+                AssistantResponseDoneEvent(response_key=request.response_key),
+            )
+            == []
+        )
+        assert not state.in_response
+        service.unregister(conn_id)
+
     # -- partial_transcription --
 
     def test_partial_transcription_emits_stable_incremental_deltas_for_one_content_part(self, service, conn_id):

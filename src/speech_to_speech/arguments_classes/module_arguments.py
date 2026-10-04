@@ -67,6 +67,10 @@ class ModuleArguments:
             "help": "Enable live transcription display while user is speaking (works with parakeet-tdt). Default is true."
         },
     )
+    enable_partial_prefill: bool = field(
+        default=False,
+        metadata={"help": "Warm the LLM with one private token after six stable transcript words. Default is false."},
+    )
     live_transcription_update_interval: float = field(
         default=0.5,
         metadata={"help": "Update interval for live transcription in seconds (default: 0.5s = 500ms)"},

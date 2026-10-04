@@ -289,6 +289,7 @@ class ConversationHandler(RealtimeBaseHandler):
 
         delta = (" " if emitted_words else "") + " ".join(word[0] for word in new_words)
         input_item.transcript_prefix += delta
+        self._service._maybe_start_partial_prefill(conn_id, event, item_id, input_item.transcript_prefix)
         return [
             ConversationItemInputAudioTranscriptionDeltaEvent(
                 type="conversation.item.input_audio_transcription.delta",

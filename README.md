@@ -671,7 +671,15 @@ See [ModuleArguments](./src/speech_to_speech/arguments_classes/module_arguments.
 - TTS implementation (`--tts`)
 - logging level
 - transcript logging (`--log_transcripts`)
+- private partial-transcript LLM warmup (`--enable_partial_prefill`)
 - realtime pipeline pool size (`--num_pipelines`)
+
+`--enable_partial_prefill` queues one private, one-token text generation after six
+stable transcript words. It uses a conversation snapshot, disables tools, and
+suppresses the speculative response from realtime output and chat history. This
+can overlap prompt processing with the rest of a spoken turn when the selected
+LLM backend caches prompt prefixes. The extra generation is bounded to one per
+turn and is disabled by default.
 
 Logs are content-free by default: transcript-bearing records report a character count rather
 than the text, because logs are commonly retained by service managers, containers and hosted

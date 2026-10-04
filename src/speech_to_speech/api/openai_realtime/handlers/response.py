@@ -160,7 +160,8 @@ class ResponseHandler(RealtimeBaseHandler):
         st = self._state(conn_id)
         request = st.tool_followup_prefetch_request
         return response_key is not None and (
-            request is not None
+            response_key in st.partial_prefill_response_keys
+            or request is not None
             and response_key == request.response_key
             or response_key == st.response_created_pending_key
         )
