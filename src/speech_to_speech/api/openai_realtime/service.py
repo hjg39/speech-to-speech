@@ -69,6 +69,7 @@ from speech_to_speech.pipeline.events import (
     TokenUsageEvent,
     TranscriptionCompletedEvent,
     TranscriptionFailedEvent,
+    WakeDetectedEvent,
 )
 from speech_to_speech.pipeline.messages import GenerateResponseRequest
 from speech_to_speech.pipeline.queue_types import TextPromptItem
@@ -85,6 +86,26 @@ CHUNK_SIZE_BYTES = CHUNK_SAMPLES * BYTES_PER_SAMPLE
 
 _ResponseStatus = Literal["completed", "cancelled", "failed", "incomplete", "in_progress"]
 _StatusReason = Literal["turn_detected", "client_cancelled", "max_output_tokens", "content_filter"]
+
+
+class WakeDetectedRealtimeEvent(BaseModel):
+    """Server-emitted ``wake_detected`` realtime event.
+
+    The OpenAI Realtime SDK (pinned in the robot app, openai 2.28.0) has no
+    CustomEvent and parses inbound messages with construct_type_unchecked, so
+    an unknown ``type`` string is yielded as a generic event object carrying
+    our extra fields. The app keys off ``event.type == "wake_detected"`` and
+    ``arm_state`` to drive a fast expression cue (antennas up on arm, back to
+    idle on expiry). The robot's wake word is the audio WakeGate's job; this
+    event is purely the cosmetic/pose signal for it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["wake_detected"] = "wake_detected"
+    event_id: str = ""
+    arm_state: Literal["armed", "expired"] = "armed"
+
 
 _EVENT_TYPE_TO_MODEL: dict[str, type[BaseModel]] = {
     "input_audio_buffer.append": InputAudioBufferAppendEvent,
@@ -131,6 +152,7 @@ ServerEvent = Union[
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
+    WakeDetectedRealtimeEvent,
 ]
 
 RealtimeEvent = Union[ClientEvent, ServerEvent]
@@ -332,6 +354,7 @@ class RealtimeService:
             ResponseGenerationDoneEvent: self.response.on_response_generation_done,
             AssistantToolCallReadyEvent: self.response.on_assistant_tool_call_ready,
             ResponseFailedEvent: self._on_response_failed,
+            WakeDetectedEvent: self._on_wake_detected,
         }
 
     # ── Connection lifecycle ─────────────────────
@@ -883,6 +906,22 @@ class RealtimeService:
         events.extend(self.response.finish_audio_output(conn_id, event.response_key))
         events.append(self.make_error(event.message, "response_failed"))
         return events
+
+    def _on_wake_detected(self, conn_id: str, event: WakeDetectedEvent) -> list[ServerEvent]:
+        """Forward the audio WakeGate's cue to the realtime client.
+
+        The robot's wake word is detected on the mic by the server-side
+        WakeGate (audio, not transcript). This handler only surfaces the
+        cosmetic cue: the app raises its "listening" pose on ``armed`` and
+        drops it on ``expired``. No response/turn state is touched — a wake
+        arms the pipeline for the next utterance; it is not itself a turn.
+        """
+        return [
+            WakeDetectedRealtimeEvent(
+                event_id=_generate_id("event"),
+                arm_state=event.arm_state,
+            )
+        ]
 
     def get_usage(self) -> dict[str, Any]:
         """Return cumulative usage metrics across all completed responses."""

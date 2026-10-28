@@ -106,3 +106,36 @@ class ModuleArguments:
             "num_pipelines; further connections are rejected. Default is 1."
         },
     )
+    wake_word_model: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to an openWakeWord verifier ONNX model ('x' 1x16x96 in, sigmoid out) used "
+            "by the WakeGate in front of VAD. When set, the robot is deaf until the wake word is "
+            "heard; each detection re-arms listening for wake_word_arm_duration seconds. When unset, "
+            "the WakeGate passes audio through unchanged (current behaviour)."
+        },
+    )
+    wake_word_name: str = field(
+        default="sciel",
+        metadata={"help": "Label key of the wake model used with predict() (default: sciel)."},
+    )
+    wake_word_threshold: float = field(
+        default=0.9,
+        metadata={
+            "help": "Verifier score threshold for the WakeGate (default: 0.9)."
+        },
+    )
+    wake_word_patience: int = field(
+        default=2,
+        metadata={
+            "help": "Consecutive 80 ms frames above the threshold before a wake alarm. "
+            "openWakeWord 0.6.0's built-in patience is deadlocked, so the gate keeps its own "
+            "counter (default: 2)."
+        },
+    )
+    wake_word_arm_duration: float = field(
+        default=20.0,
+        metadata={
+            "help": "Seconds the pipeline stays listening after a wake detection (default: 20)."
+        },
+    )

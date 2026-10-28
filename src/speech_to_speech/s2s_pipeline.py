@@ -355,7 +355,9 @@ def _build_handlers(
     *,
     stop_event: Event,
     should_listen: Event,
+    response_playing: Event,
     recv_audio_chunks_queue: Queue[AudioInItem],
+    wake_gate_queue: Queue[AudioInItem],
     spoken_prompt_queue: Queue[VADOutItem],
     stt_output_queue: Queue[STTOutItem],
     text_prompt_queue: Queue[TextPromptItem],
@@ -374,10 +376,11 @@ def _build_handlers(
 ) -> list[Any]:
     """Build a handler chain: VAD → STT/AudioInput → LM → TTS."""
     from speech_to_speech.LLM.lm_output_processor import LMOutputProcessor
+    from speech_to_speech.VAD.wake_handler import WakeGate, WakeGateConfig
 
     vad = VADHandler(
         stop_event,
-        queue_in=recv_audio_chunks_queue,
+        queue_in=wake_gate_queue,
         queue_out=spoken_prompt_queue,
         setup_args=(should_listen,),
         setup_kwargs={
@@ -387,6 +390,24 @@ def _build_handlers(
             },
             "text_output_queue": text_output_queue,
             "speculative_turns": speculative_turns,
+        },
+    )
+
+    wake = WakeGate(
+        stop_event,
+        queue_in=recv_audio_chunks_queue,
+        queue_out=wake_gate_queue,
+        setup_kwargs={
+            "cfg": WakeGateConfig(
+                model_path=module_kwargs.wake_word_model or "",
+                name=module_kwargs.wake_word_name,
+                threshold=module_kwargs.wake_word_threshold,
+                patience=module_kwargs.wake_word_patience,
+                arm_duration_s=module_kwargs.wake_word_arm_duration,
+            ),
+            "should_listen": should_listen,
+            "response_playing": response_playing,
+            "text_output_queue": text_output_queue,
         },
     )
 
@@ -458,7 +479,7 @@ def _build_handlers(
         tts_context,
     )
 
-    return [vad, *speech_input_handlers, lm, lm_processor, tts]
+    return [wake, vad, *speech_input_handlers, lm, lm_processor, tts]
 
 
 def _build_pipeline_unit(
@@ -490,6 +511,12 @@ def _build_pipeline_unit(
     cancel_scope = CancelScope()
     speculative_turns = SpeculativeTurnTracker()
     recv_audio_chunks_queue: Queue[AudioInItem] = Queue()
+    # WakeGate -> VAD handoff. The gate is a pure pass-through (it re-emits the
+    # original client chunk byte-for-byte, never re-chunked frames) but it needs
+    # its OWN output queue: if the gate shared the VAD's spoken_prompt_queue
+    # with the VAD, the VAD would read the gate's (bytes, RuntimeConfig) tuples
+    # off its own output queue (and its own VADAudio objects) — a self-loop.
+    wake_gate_queue: Queue[AudioInItem] = Queue()
     send_audio_chunks_queue: Queue[AudioOutItem] = Queue()
     spoken_prompt_queue: Queue[VADOutItem] = Queue()
     stt_output_queue: Queue[STTOutItem] = Queue()
@@ -517,7 +544,9 @@ def _build_pipeline_unit(
     handlers = _build_handlers(
         stop_event=stop_event,
         should_listen=should_listen,
+        response_playing=response_playing,
         recv_audio_chunks_queue=recv_audio_chunks_queue,
+        wake_gate_queue=wake_gate_queue,
         spoken_prompt_queue=spoken_prompt_queue,
         stt_output_queue=stt_output_queue,
         text_prompt_queue=text_prompt_queue,

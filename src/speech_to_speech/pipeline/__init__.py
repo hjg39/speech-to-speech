@@ -16,6 +16,7 @@ from speech_to_speech.pipeline.events import (
     SpeechStoppedEvent,
     TokenUsageEvent,
     TranscriptionCompletedEvent,
+    WakeDetectedEvent,
 )
 from speech_to_speech.pipeline.messages import (
     AUDIO_RESPONSE_DONE,

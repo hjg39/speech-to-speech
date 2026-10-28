@@ -50,6 +50,22 @@ class SpeechStoppedEvent(PipelineEvent):
     turn_revision: int | None = None
 
 
+class WakeDetectedEvent(PipelineEvent):
+    """Server-side wake word ("Sciel") detected on the mic stream.
+
+    Emitted by WakeGate when the verifier fires (arm_state="armed") or when
+    the arm window expires (arm_state="expired"). The realtime client maps the
+    "armed" cue to a fast expression (antennas up / listening pose) and
+    "expired" back to idle. The OpenAI Realtime SDK has no CustomEvent, so the
+    router surfaces it as a plain ``wake_detected`` realtime event, which the
+    pinned client SDK parses via construct_type_unchecked.
+    """
+
+    type: Literal["wake_detected"] = "wake_detected"
+    now: float = 0.0
+    arm_state: Literal["armed", "expired"] = "armed"
+
+
 # ── Transcription events (TranscriptionNotifier) ─────────────────────
 
 
